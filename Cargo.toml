@@ -10,5 +10,5 @@ edition = "2018"
 tokio = { git = "https://github.com/tokio-rs/tokio", branch = "eliza/trace-spawns", features = ["tracing"] }
 tracing-subscriber = { version = "0.2", default-features = false, features = ["fmt"] }
 tracing-core = "0.1"
-quanta = "0.6"
+# quanta = "0.6"
 num_cpus = "1"

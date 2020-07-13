@@ -1,11 +1,18 @@
 use std::cell::Cell;
 use std::marker::PhantomData;
-use std::sync::{mpsc, Arc, AtomicPtr, Ordering, Weak};
-use std::{fmt, ptr};
+use std::sync::{
+    atomic::{AtomicPtr, AtomicUsize, Ordering},
+    Arc, Mutex, Weak,
+};
+use std::time::Instant;
+use std::{
+    fmt::{self, Write},
+    ptr,
+};
 use tracing_core::{
     field::{self, Field},
     span,
-    subscriber::{self, Interest},
+    subscriber::{self, Subscriber},
     Metadata,
 };
 use tracing_subscriber::{
@@ -14,7 +21,8 @@ use tracing_subscriber::{
         FormattedFields,
     },
     layer::Context,
-    Layer, LookupSpan,
+    registry::LookupSpan,
+    Layer,
 };
 
 pub struct TasksLayer<F = DefaultFields> {
@@ -28,18 +36,18 @@ pub struct TaskData {
     pub future: String,
     pub scope: String,
     pub kind: String,
-    pub created: quanta::Instant,
+    pub created: Instant,
     _p: (),
 }
 
 #[derive(Clone)]
 pub struct TaskList(Arc<[Mutex<Vec<Weak<TaskData>>>]>);
 
-impl<F> TaskLayer<F> {
+impl<F> TasksLayer<F> {
     pub fn new() -> (TaskList, Self) {
         let list = TaskList::new();
         let layer = Self {
-            list: list.clone(),
+            tasks: list.clone(),
             task_meta: AtomicPtr::new(ptr::null_mut()),
             blocking_meta: AtomicPtr::new(ptr::null_mut()),
             _f: PhantomData,
@@ -55,25 +63,35 @@ where
 {
     fn register_callsite(&self, meta: &'static Metadata<'static>) -> subscriber::Interest {
         if meta.target() == "tokio::task" && meta.name() == "task" {
-            if meta.fields().any(|f| f.name == "future") {
-                self.task_meta
-                    .compare_and_swap(ptr::null_mut(), meta as *mut _, Ordering::AcqRel);
+            if meta.fields().iter().any(|f| f.name() == "future") {
+                self.task_meta.compare_and_swap(
+                    ptr::null_mut(),
+                    meta as *const _ as *mut _,
+                    Ordering::AcqRel,
+                );
             } else {
                 self.blocking_meta.compare_and_swap(
                     ptr::null_mut(),
-                    meta as *mut _,
+                    meta as *const _ as *mut _,
                     Ordering::AcqRel,
                 );
             }
+            subscriber::Interest::always()
+        } else {
+            subscriber::Interest::never()
         }
     }
 
     fn new_span(&self, attrs: &span::Attributes<'_>, id: &span::Id, cx: Context<'_, S>) {
         let meta = attrs.metadata();
-        if ptr::eq(self.task_meta.load(Ordering::Acquire), meta as *mut _)
-            || ptr::eq(self.blocking_meta.load(Ordering::Acquire), meta as *mut _)
-        {
-            let created = quanta::Instant::now();
+        if ptr::eq(
+            self.task_meta.load(Ordering::Acquire),
+            meta as *const _ as *mut _,
+        ) || ptr::eq(
+            self.blocking_meta.load(Ordering::Acquire),
+            meta as *const _ as *mut _,
+        ) {
+            let created = Instant::now();
             let mut task_data = TaskData {
                 future: String::new(),
                 scope: String::new(),
@@ -82,27 +100,27 @@ where
                 _p: (),
             };
             let span = cx.span(id).expect("span must exist");
-            for span in span.scope() {
-                write!(&mut task_data.scope, "\t{}", span.name());
+            for span in span.parents() {
+                write!(&mut task_data.scope, "\t{}", span.name()).unwrap();
                 let exts = span.extensions();
                 if let Some(fields) = exts.get::<FormattedFields<F>>() {
-                    write!(&mut task_data.scope, "{{{}}}", fields.fields);
+                    write!(&mut task_data.scope, "{{{}}}", fields.fields).unwrap();
                 }
             }
             attrs.record(&mut task_data);
             let task_data = Arc::new(task_data);
             let weak = Arc::downgrade(&task_data);
             span.extensions_mut().insert(task_data);
-            self.tx.send(weak);
+            self.tasks.insert(weak);
         }
     }
 }
 
 impl field::Visit for TaskData {
-    fn record_debug(&mut self, field: &Field, value: &mut dyn fmt::Debug) {
+    fn record_debug(&mut self, field: &Field, value: &dyn fmt::Debug) {
         match field.name() {
-            "future" => write!(&mut self.future, "{:?}", value),
-            "kind" => write!(&mut self.kind, "{:?}", value),
+            "future" => write!(&mut self.future, "{:?}", value).unwrap(),
+            "kind" => write!(&mut self.kind, "{:?}", value).unwrap(),
             _ => {}
         }
     }
@@ -110,7 +128,12 @@ impl field::Visit for TaskData {
 
 impl TaskList {
     fn new() -> Self {
-        Self(Arc::from(vec![Mutex::new(Vec::new()); num_cpus::get()]))
+        Self(
+            (0..num_cpus::get())
+                .map(|_| Mutex::new(Vec::new()))
+                .collect::<Vec<_>>()
+                .into(),
+        )
     }
 
     fn insert(&self, task: Weak<TaskData>) {
@@ -132,9 +155,9 @@ impl TaskList {
         self.0[idx].lock().unwrap().push(task);
     }
 
-    fn tasks(&self, mut f: impl FnMut(&TaskData)) {
-        for shard in self.0 {
-            let shard = shard.lock().unwrap();
+    pub fn tasks(&self, mut f: impl FnMut(&TaskData)) {
+        for shard in self.0.iter() {
+            let mut shard = shard.lock().unwrap();
             shard.retain(|weak| {
                 if let Some(task) = weak.upgrade() {
                     f(&task);
