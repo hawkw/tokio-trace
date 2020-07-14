@@ -9,7 +9,7 @@ use std::{
     cell::Cell,
     fmt::{self, Write},
     marker::PhantomData,
-    ptr,
+    ptr, slice,
     time::{Duration, Instant},
 };
 use tracing_core::{
@@ -254,6 +254,10 @@ impl TaskData {
 }
 
 impl<'a> Timings<'a> {
+    pub fn to_first_poll(&self) -> Option<Duration> {
+        Some(self.0.created.duration_since(self.0.first_poll?))
+    }
+
     pub fn busy_time(&self) -> Duration {
         if let Some(last_entered) = self.0.last_entered {
             return self.0.busy_time + last_entered.elapsed();
