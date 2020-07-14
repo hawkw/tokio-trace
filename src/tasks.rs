@@ -1,13 +1,16 @@
-use std::cell::Cell;
-use std::marker::PhantomData;
 use std::sync::{
-    atomic::{AtomicPtr, AtomicUsize, Ordering},
-    Arc, Mutex, Weak,
+    atomic::{
+        AtomicPtr, AtomicUsize,
+        Ordering::{AcqRel, Acquire, Relaxed},
+    },
+    Arc, Mutex, MutexGuard, Weak,
 };
-use std::time::Instant;
 use std::{
+    cell::Cell,
     fmt::{self, Write},
+    marker::PhantomData,
     ptr,
+    time::{Duration, Instant},
 };
 use tracing_core::{
     field::{self, Field},
@@ -32,12 +35,24 @@ pub struct TasksLayer<F = DefaultFields> {
     _f: PhantomData<fn(F)>,
 }
 
+#[derive(Debug)]
 pub struct TaskData {
     pub future: String,
     pub scope: String,
     pub kind: String,
-    pub created: Instant,
-    _p: (),
+    currently_in: AtomicUsize,
+    timings: Mutex<TimeData>,
+}
+
+#[derive(Debug)]
+pub struct Timings<'a>(MutexGuard<'a, TimeData>);
+
+#[derive(Debug)]
+struct TimeData {
+    created: Instant,
+    first_poll: Option<Instant>,
+    last_entered: Option<Instant>,
+    busy_time: Duration,
 }
 
 #[derive(Clone)]
@@ -56,6 +71,13 @@ impl<F> TasksLayer<F> {
     }
 }
 
+impl<F> TasksLayer<F> {
+    fn cares_about(&self, meta: &'static Metadata<'static>) -> bool {
+        ptr::eq(self.task_meta.load(Acquire), meta as *const _ as *mut _)
+            || ptr::eq(self.blocking_meta.load(Acquire), meta as *const _ as *mut _)
+    }
+}
+
 impl<S, F> Layer<S> for TasksLayer<F>
 where
     S: Subscriber + for<'span> LookupSpan<'span>,
@@ -67,13 +89,13 @@ where
                 self.task_meta.compare_and_swap(
                     ptr::null_mut(),
                     meta as *const _ as *mut _,
-                    Ordering::AcqRel,
+                    AcqRel,
                 );
             } else {
                 self.blocking_meta.compare_and_swap(
                     ptr::null_mut(),
                     meta as *const _ as *mut _,
-                    Ordering::AcqRel,
+                    AcqRel,
                 );
             }
             subscriber::Interest::always()
@@ -84,20 +106,19 @@ where
 
     fn new_span(&self, attrs: &span::Attributes<'_>, id: &span::Id, cx: Context<'_, S>) {
         let meta = attrs.metadata();
-        if ptr::eq(
-            self.task_meta.load(Ordering::Acquire),
-            meta as *const _ as *mut _,
-        ) || ptr::eq(
-            self.blocking_meta.load(Ordering::Acquire),
-            meta as *const _ as *mut _,
-        ) {
+        if self.cares_about(meta) {
             let created = Instant::now();
             let mut task_data = TaskData {
                 future: String::new(),
                 scope: String::new(),
                 kind: String::new(),
-                created,
-                _p: (),
+                currently_in: AtomicUsize::new(0),
+                timings: Mutex::new(TimeData {
+                    created,
+                    first_poll: None,
+                    last_entered: None,
+                    busy_time: Duration::from_secs(0),
+                }),
             };
             let span = cx.span(id).expect("span must exist");
             for span in span.parents() {
@@ -112,6 +133,58 @@ where
             let weak = Arc::downgrade(&task_data);
             span.extensions_mut().insert(task_data);
             self.tasks.insert(weak);
+        }
+    }
+
+    fn on_enter(&self, id: &span::Id, cx: Context<'_, S>) {
+        if let Some(span) = cx.span(id) {
+            if self.cares_about(span.metadata()) {
+                let now = Instant::now();
+                let exts = span.extensions();
+                if let Some(task) = exts.get::<TaskData>() {
+                    let currently_in = task.currently_in.fetch_add(1, AcqRel);
+
+                    // If we are the first thread to enter this span, update the
+                    // timestamps.
+                    if currently_in == 0 {
+                        // Safe to lock!
+                        let mut timings = task.timings.lock().unwrap();
+                        if timings.first_poll.is_none() {
+                            timings.first_poll = Some(now)
+                        }
+                        debug_assert!(timings.last_entered.is_none());
+                        timings.last_entered = Some(now);
+                    }
+                }
+            }
+        }
+    }
+
+    fn on_exit(&self, id: &span::Id, cx: Context<'_, S>) {
+        if let Some(span) = cx.span(id) {
+            if self.cares_about(span.metadata()) {
+                let now = Instant::now();
+                let exts = span.extensions();
+                if let Some(task) = exts.get::<TaskData>() {
+                    let currently_in = task.currently_in.fetch_sub(1, AcqRel);
+
+                    // If we are the last thread to enter this span, update the
+                    // timestamps.
+                    if currently_in == 1 {
+                        // Safe to lock!
+                        let mut timings = task.timings.lock().unwrap();
+                        if timings.first_poll.is_none() {
+                            timings.first_poll = Some(now)
+                        }
+                        let last_entered = timings
+                            .last_entered
+                            .take()
+                            .expect("task must be entered to be exited");
+                        let delta = now.duration_since(last_entered);
+                        timings.busy_time += delta;
+                    }
+                }
+            }
         }
     }
 }
@@ -147,7 +220,7 @@ impl TaskList {
             if let Some(id) = curr.get() {
                 id
             } else {
-                let id = NEXT.fetch_add(1, Ordering::Relaxed) % self.0.len();
+                let id = NEXT.fetch_add(1, Relaxed) % self.0.len();
                 curr.set(Some(id));
                 id
             }
@@ -167,5 +240,33 @@ impl TaskList {
                 }
             })
         }
+    }
+}
+
+impl TaskData {
+    pub fn timings(&self) -> Timings<'_> {
+        Timings(self.timings.lock().unwrap())
+    }
+
+    pub fn is_active(&self) -> bool {
+        self.currently_in.load(Acquire) > 0
+    }
+}
+
+impl<'a> Timings<'a> {
+    pub fn busy_time(&self) -> Duration {
+        if let Some(last_entered) = self.0.last_entered {
+            return self.0.busy_time + last_entered.elapsed();
+        }
+
+        self.0.busy_time
+    }
+
+    pub fn total_time(&self) -> Duration {
+        self.0.created.elapsed()
+    }
+
+    pub fn idle_time(&self) -> Duration {
+        self.total_time() - self.busy_time()
     }
 }
