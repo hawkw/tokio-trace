@@ -1,7 +1,7 @@
 use std::sync::{
     atomic::{
         AtomicPtr, AtomicUsize,
-        Ordering::{AcqRel, Acquire, Relaxed},
+        Ordering::{AcqRel, Acquire, Relaxed, SeqCst},
     },
     Arc, Mutex, MutexGuard, Weak,
 };
@@ -142,8 +142,8 @@ where
                 let now = Instant::now();
                 let exts = span.extensions();
                 if let Some(task) = exts.get::<TaskData>() {
-                    let currently_in = task.currently_in.fetch_add(1, AcqRel);
-
+                    let currently_in = task.currently_in.fetch_add(1, SeqCst);
+                    // dbg!(("enter", currently_in));
                     // If we are the first thread to enter this span, update the
                     // timestamps.
                     if currently_in == 0 {
@@ -166,8 +166,9 @@ where
                 let now = Instant::now();
                 let exts = span.extensions();
                 if let Some(task) = exts.get::<TaskData>() {
-                    let currently_in = task.currently_in.fetch_sub(1, AcqRel);
+                    let currently_in = task.currently_in.fetch_sub(1, SeqCst);
 
+                    dbg!(("exit", currently_in));
                     // If we are the last thread to enter this span, update the
                     // timestamps.
                     if currently_in == 1 {
