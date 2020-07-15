@@ -270,7 +270,7 @@ impl TaskData {
 
 impl<'a> Timings<'a> {
     pub fn to_first_poll(&self) -> Option<Duration> {
-        Some(self.data.created.duration_since(self.data.first_poll?))
+        Some(self.data.first_poll?.duration_since(self.data.created))
     }
 
     pub fn busy_time(&self) -> Duration {
