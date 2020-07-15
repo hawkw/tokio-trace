@@ -150,7 +150,7 @@ where
             let now = Instant::now();
             let exts = span.extensions();
             if let Some(task) = exts.get::<Arc<TaskData>>() {
-                let currently_in = task.currently_in.fetch_add(1, SeqCst);
+                let currently_in = task.currently_in.fetch_add(1, AcqRel);
                 task.polls.fetch_add(1, Release);
                 // If we are the first thread to enter this span, update the
                 // timestamps.
@@ -175,7 +175,7 @@ where
             let now = Instant::now();
             let exts = span.extensions();
             if let Some(task) = exts.get::<Arc<TaskData>>() {
-                let currently_in = task.currently_in.fetch_sub(1, SeqCst);
+                let currently_in = task.currently_in.fetch_sub(1, AcqRel);
 
                 // If we are the last thread to enter this span, update the
                 // timestamps.
