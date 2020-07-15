@@ -59,6 +59,10 @@ struct TimeData {
 #[derive(Clone)]
 pub struct TaskList(Arc<[Mutex<Vec<Weak<TaskData>>>]>);
 
+pub fn tasks() -> (TaskList, TasksLayer) {
+    TasksLayer::new()
+}
+
 impl<F> TasksLayer<F> {
     pub fn new() -> (TaskList, Self) {
         let list = TaskList::new();
