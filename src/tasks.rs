@@ -319,4 +319,21 @@ mod serde {
             state.end()
         }
     }
+
+    impl Serialize for TaskList {
+        fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
+        where
+            S: Serializer,
+        {
+            let mut state = serializer.serialze_seq(None)?;
+            let mut res = Ok(());
+            self.tasks(|task| {
+                if res.is_ok() {
+                    res = state.serialize_element(task).map(|_| ());
+                }
+            });
+            res?;
+            state.end()
+        }
+    }
 }
