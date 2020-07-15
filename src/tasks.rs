@@ -43,7 +43,10 @@ pub struct TaskData {
 }
 
 #[derive(Debug)]
-pub struct Timings<'a>(MutexGuard<'a, TimeData>);
+pub struct Timings<'a> {
+    data: MutexGuard<'a, TimeData>,
+    now: Instant,
+}
 
 #[derive(Debug)]
 struct TimeData {
@@ -242,7 +245,10 @@ impl TaskList {
 
 impl TaskData {
     pub fn timings(&self) -> Timings<'_> {
-        Timings(self.timings.lock().unwrap())
+        Timings {
+            data: self.timings.lock().unwrap(),
+            now: Instant::now(),
+        }
     }
 
     pub fn is_active(&self) -> bool {
@@ -256,19 +262,19 @@ impl TaskData {
 
 impl<'a> Timings<'a> {
     pub fn to_first_poll(&self) -> Option<Duration> {
-        Some(self.0.created.duration_since(self.0.first_poll?))
+        Some(self.data.created.duration_since(self.data.first_poll?))
     }
 
     pub fn busy_time(&self) -> Duration {
-        if let Some(last_entered) = self.0.last_entered {
-            return self.0.busy_time + last_entered.elapsed();
+        if let Some(last_entered) = self.data.last_entered {
+            return self.data.busy_time + self.now.duration_since(last_entered);
         }
 
-        self.0.busy_time
+        self.data.busy_time
     }
 
     pub fn total_time(&self) -> Duration {
-        self.0.created.elapsed()
+        self.now.duration_since(self.data.created)
     }
 
     pub fn idle_time(&self) -> Duration {
