@@ -284,7 +284,7 @@ impl<'a> Timings<'a> {
 
 #[cfg(feature = "serde")]
 mod serde {
-    use super::*;
+    use super::{TaskData, TaskList, Timings};
     use serde::ser::{Serialize, SerializeStruct, Serializer};
 
     impl Serialize for TaskData {
