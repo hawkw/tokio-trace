@@ -138,23 +138,21 @@ where
 
     fn on_enter(&self, id: &span::Id, cx: Context<'_, S>) {
         if let Some(span) = cx.span(id) {
-            if self.cares_about(span.metadata()) {
-                let now = Instant::now();
-                let exts = span.extensions();
-                if let Some(task) = exts.get::<TaskData>() {
-                    let currently_in = task.currently_in.fetch_add(1, SeqCst);
-                    // dbg!(("enter", currently_in));
-                    // If we are the first thread to enter this span, update the
-                    // timestamps.
-                    if currently_in == 0 {
-                        // Safe to lock!
-                        let mut timings = task.timings.lock().unwrap();
-                        if timings.first_poll.is_none() {
-                            timings.first_poll = Some(now)
-                        }
-                        debug_assert!(timings.last_entered.is_none());
-                        timings.last_entered = Some(now);
+            let now = Instant::now();
+            let exts = span.extensions();
+            if let Some(task) = exts.get::<TaskData>() {
+                let currently_in = task.currently_in.fetch_add(1, SeqCst);
+                // dbg!(("enter", currently_in));
+                // If we are the first thread to enter this span, update the
+                // timestamps.
+                if currently_in == 0 {
+                    // Safe to lock!
+                    let mut timings = task.timings.lock().unwrap();
+                    if timings.first_poll.is_none() {
+                        timings.first_poll = Some(now)
                     }
+                    debug_assert!(timings.last_entered.is_none());
+                    timings.last_entered = Some(now);
                 }
             }
         }
@@ -162,28 +160,26 @@ where
 
     fn on_exit(&self, id: &span::Id, cx: Context<'_, S>) {
         if let Some(span) = cx.span(id) {
-            if self.cares_about(span.metadata()) {
-                let now = Instant::now();
-                let exts = span.extensions();
-                if let Some(task) = exts.get::<TaskData>() {
-                    let currently_in = task.currently_in.fetch_sub(1, SeqCst);
+            let now = Instant::now();
+            let exts = span.extensions();
+            if let Some(task) = exts.get::<TaskData>() {
+                let currently_in = task.currently_in.fetch_sub(1, SeqCst);
 
-                    dbg!(("exit", currently_in));
-                    // If we are the last thread to enter this span, update the
-                    // timestamps.
-                    if currently_in == 1 {
-                        // Safe to lock!
-                        let mut timings = task.timings.lock().unwrap();
-                        if timings.first_poll.is_none() {
-                            timings.first_poll = Some(now)
-                        }
-                        let last_entered = timings
-                            .last_entered
-                            .take()
-                            .expect("task must be entered to be exited");
-                        let delta = now.duration_since(last_entered);
-                        timings.busy_time += delta;
+                dbg!(("exit", currently_in));
+                // If we are the last thread to enter this span, update the
+                // timestamps.
+                if currently_in == 1 {
+                    // Safe to lock!
+                    let mut timings = task.timings.lock().unwrap();
+                    if timings.first_poll.is_none() {
+                        timings.first_poll = Some(now)
                     }
+                    let last_entered = timings
+                        .last_entered
+                        .take()
+                        .expect("task must be entered to be exited");
+                    let delta = now.duration_since(last_entered);
+                    timings.busy_time += delta;
                 }
             }
         }
