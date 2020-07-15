@@ -281,3 +281,42 @@ impl<'a> Timings<'a> {
         self.total_time() - self.busy_time()
     }
 }
+
+#[cfg(feature = "serde")]
+mod serde {
+    use super::*;
+    use serde::ser::{Serialize, SerializeStruct, Serializer};
+
+    impl Serialize for TaskData {
+        fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
+        where
+            S: Serializer,
+        {
+            let mut state = serializer.serialize_struct("TaskData", 6)?;
+            state.serialize_field("kind", self.kind.as_ref())?;
+            state.serialize_field("is_active", self.is_active())?;
+            state.serialize_field("polls", self.polls())?;
+            state.serialize_field("scope", self.scope.as_ref())?;
+            state.serialize_field("future", self.future.as_ref())?;
+            state.serialize_field("timings", self.timings())?;
+            state.end()
+        }
+    }
+
+    impl Serialize for Timings<'_> {
+        fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
+        where
+            S: Serializer,
+        {
+            let mut state = serializer.serialize_struct("Timings", 4)?;
+            state.serialize_field(
+                "to_first_poll_ns",
+                self.to_first_poll().map(Duration::as_nanos),
+            )?;
+            state.serialize_field("busy_ns", self.busy_time().as_nanos())?;
+            state.serialize_field("idle_ns", self.idle_time().as_nanos())?;
+            state.serialize_field("total_ns", self.total_time().as_nanos())?;
+            state.end()
+        }
+    }
+}

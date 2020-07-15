@@ -12,3 +12,4 @@ tracing-subscriber = { version = "0.2", default-features = false, features = ["f
 tracing-core = "0.1"
 # quanta = "0.6"
 num_cpus = "1"
+serde = { version = "1", optional = true }
