@@ -77,9 +77,10 @@ impl<F> TasksLayer<F> {
 }
 
 impl<F> TasksLayer<F> {
+    #[inline(always)]
     fn cares_about(&self, meta: &'static Metadata<'static>) -> bool {
-        ptr::eq(self.task_meta.load(Acquire), meta as *const _ as *mut _)
-            || ptr::eq(self.blocking_meta.load(Acquire), meta as *const _ as *mut _)
+        ptr::eq(self.task_meta.load(Relaxed), meta as *const _ as *mut _)
+            || ptr::eq(self.blocking_meta.load(Relaxed), meta as *const _ as *mut _)
     }
 }
 
@@ -103,10 +104,9 @@ where
                     AcqRel,
                 );
             }
-            subscriber::Interest::always()
-        } else {
-            subscriber::Interest::sometimes()
         }
+
+        subscriber::Interest::always()
     }
 
     fn new_span(&self, attrs: &span::Attributes<'_>, id: &span::Id, cx: Context<'_, S>) {
