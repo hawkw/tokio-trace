@@ -1,15 +1,12 @@
 use std::sync::{
-    atomic::{
-        AtomicPtr, AtomicUsize,
-        Ordering::{AcqRel, Acquire, Relaxed, SeqCst},
-    },
+    atomic::{AtomicPtr, AtomicUsize, Ordering::*},
     Arc, Mutex, MutexGuard, Weak,
 };
 use std::{
     cell::Cell,
     fmt::{self, Write},
     marker::PhantomData,
-    ptr, slice,
+    ptr,
     time::{Duration, Instant},
 };
 use tracing_core::{
@@ -40,6 +37,7 @@ pub struct TaskData {
     pub future: String,
     pub scope: String,
     pub kind: String,
+    polls: AtomicUsize,
     currently_in: AtomicUsize,
     timings: Mutex<TimeData>,
 }
@@ -113,6 +111,7 @@ where
                 scope: String::new(),
                 kind: String::new(),
                 currently_in: AtomicUsize::new(0),
+                polls: AtomicUsize::new(0),
                 timings: Mutex::new(TimeData {
                     created,
                     first_poll: None,
@@ -142,7 +141,8 @@ where
             let exts = span.extensions();
             if let Some(task) = exts.get::<TaskData>() {
                 let currently_in = task.currently_in.fetch_add(1, SeqCst);
-                dbg!(("enter", currently_in));
+                let polls = task.polls.fetch_add(1, Release);
+                dbg!(("enter", currently_in, polls));
                 // If we are the first thread to enter this span, update the
                 // timestamps.
                 if currently_in == 0 {
@@ -247,6 +247,10 @@ impl TaskData {
 
     pub fn is_active(&self) -> bool {
         self.currently_in.load(Acquire) > 0
+    }
+
+    pub fn polls(&self) -> usize {
+        self.polls.load(Acquire)
     }
 }
 
