@@ -144,12 +144,14 @@ where
 
     fn on_enter(&self, id: &span::Id, cx: Context<'_, S>) {
         if let Some(span) = cx.span(id) {
+            if !self.cares_about(span.metadata()) {
+                return;
+            }
             let now = Instant::now();
             let exts = span.extensions();
-            if let Some(task) = exts.get::<TaskData>() {
+            if let Some(task) = exts.get::<Arc<TaskData>>() {
                 let currently_in = task.currently_in.fetch_add(1, SeqCst);
-                let polls = task.polls.fetch_add(1, Release);
-                dbg!(("enter", currently_in, polls));
+                task.polls.fetch_add(1, Release);
                 // If we are the first thread to enter this span, update the
                 // timestamps.
                 if currently_in == 0 {
@@ -167,12 +169,14 @@ where
 
     fn on_exit(&self, id: &span::Id, cx: Context<'_, S>) {
         if let Some(span) = cx.span(id) {
+            if !self.cares_about(span.metadata()) {
+                return;
+            }
             let now = Instant::now();
             let exts = span.extensions();
-            if let Some(task) = exts.get::<TaskData>() {
+            if let Some(task) = exts.get::<Arc<TaskData>>() {
                 let currently_in = task.currently_in.fetch_sub(1, SeqCst);
 
-                dbg!(("exit", currently_in));
                 // If we are the last thread to enter this span, update the
                 // timestamps.
                 if currently_in == 1 {
