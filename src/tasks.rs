@@ -100,7 +100,7 @@ where
             }
             subscriber::Interest::always()
         } else {
-            subscriber::Interest::never()
+            subscriber::Interest::sometimes()
         }
     }
 
@@ -142,7 +142,7 @@ where
             let exts = span.extensions();
             if let Some(task) = exts.get::<TaskData>() {
                 let currently_in = task.currently_in.fetch_add(1, SeqCst);
-                // dbg!(("enter", currently_in));
+                dbg!(("enter", currently_in));
                 // If we are the first thread to enter this span, update the
                 // timestamps.
                 if currently_in == 0 {
