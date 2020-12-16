@@ -34,7 +34,7 @@ pub struct TasksLayer<F = DefaultFields> {
 
 #[derive(Debug)]
 pub struct TaskData {
-    pub future: String,
+    pub location: String,
     pub scope: String,
     pub kind: String,
     polls: AtomicUsize,
@@ -114,7 +114,7 @@ where
         if self.cares_about(meta) {
             let created = Instant::now();
             let mut task_data = TaskData {
-                future: String::new(),
+                location: String::new(),
                 scope: String::new(),
                 kind: String::new(),
                 currently_in: AtomicUsize::new(0),
@@ -200,7 +200,7 @@ where
 impl field::Visit for TaskData {
     fn record_debug(&mut self, field: &Field, value: &dyn fmt::Debug) {
         match field.name() {
-            "future" => write!(&mut self.future, "{:?}", value).unwrap(),
+            "spawn.location" => write!(&mut self.location, "{:?}", value).unwrap(),
             "kind" => write!(&mut self.kind, "{:?}", value).unwrap(),
             _ => {}
         }
@@ -305,7 +305,7 @@ mod serde {
             state.serialize_field("is_active", &self.is_active())?;
             state.serialize_field("polls", &self.polls())?;
             state.serialize_field("scope", &self.scope)?;
-            state.serialize_field("future", &self.future)?;
+            state.serialize_field("location", &self.location)?;
             state.serialize_field("timings", &self.timings())?;
             state.end()
         }
